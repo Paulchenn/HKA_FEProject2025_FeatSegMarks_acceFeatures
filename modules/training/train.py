@@ -11,9 +11,9 @@ import sys
 def parse_arguments():
     parser = argparse.ArgumentParser(description="XFeat training script.")
 
-    parser.add_argument('--megadepth_root_path', type=str, default='/ssd/guipotje/Data/MegaDepth',
+    parser.add_argument('--megadepth_root_path', type=str, default='/home/docker/torch/dataMegaDepth',
                         help='Path to the MegaDepth dataset root directory.')
-    parser.add_argument('--synthetic_root_path', type=str, default='/homeLocal/guipotje/sshfs/datasets/coco_20k',
+    parser.add_argument('--synthetic_root_path', type=str, default='/home/docker/torch/data/coco_20k',
                         help='Path to the synthetic dataset root directory.')
     parser.add_argument('--ckpt_save_path', type=str, required=True,
                         help='Path to save the checkpoints.')
