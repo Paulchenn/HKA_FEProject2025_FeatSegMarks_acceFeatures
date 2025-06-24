@@ -1,4 +1,9 @@
 import torch.nn.functional as F
+import torch.nn as nn
+from modules.iccv_Generator import ICCVGenerator
+from modules.iccv_descriptor import ICCVDescriptor
+from modules.iccv_classificator import ICCVClassifier
+from modules.xfeat import XFeat
 
 class CombinedModel(nn.Module):
     def __init__(self, weights_path, target_size=(480, 480)):
@@ -23,7 +28,7 @@ class CombinedModel(nn.Module):
         # Generator
         x_gen = self.gen(x)  # typischerweise [B, 3, 32, 32]
 
-        # 📈 Upscaling auf gewünschte Größe
+        # Upscaling auf gewünschte Größe
         x_up = F.interpolate(
             x_gen,
             size=self.target_size,
