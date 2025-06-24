@@ -12,6 +12,11 @@ import torch
 from time import time, sleep
 import argparse, sys, tqdm
 import threading
+from modules import CombinedModel
+
+#TODO Pfad vom Kuka Rechner zu Generator etc hier einfügen
+weights_path = "/home/deinBenutzername/Desktop/iccv_modelle"
+iccv_output_wrapper = CombinedModel(weights_path)
 
 from modules.xfeat import XFeat
 
