@@ -170,12 +170,16 @@ class GeneratorDemo:
             if frame is None:
                 continue
 
-            z_input = torch.randn(1, 100, 1, 1)
-            # label_img = self.preprocess(frame)
-            label_img = iccv_output_wrapper.preprocess_for_generator(frame)
+            # z_input = torch.randn(1, 100, 1, 1)
+            # # label_img = self.preprocess(frame)
+            # label_img = iccv_output_wrapper.preprocess_for_generator(frame)
+            device = iccv_output_wrapper.xfeat.dev
+            z_input = torch.randn(1, 100, 1, 1).to(device)
 
+            # label_img und context_img über CombinedModel vorbereiten
+            label_img = iccv_output_wrapper.preprocess_for_generator(frame).to(device)
+            context_img = iccv_output_wrapper.preprocess_for_generator(frame).to(device)
 
-            context_img = self.preprocess(frame)
 
             with torch.no_grad():
                 # output = iccv_output_wrapper(z_input, label_img, context_img)

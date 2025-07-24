@@ -8,6 +8,7 @@ import os
 import time
 import sys
 from modules.training.losses import combined_generator_feature_loss
+from modules.iccv_Generator import ICCVGenerator
 
 
 def parse_arguments():
@@ -82,12 +83,18 @@ class Trainer():
                        save_ckpt_every = 500):
 
         self.dev = torch.device ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.net = XFeatModel().to(self.dev)
+        #self.net = XFeatModel().to(self.dev)
+
+        self.gen = ICCVGenerator().to(self.dev)
+        self.xfeat = XFeatModel().to(self.dev)
+
 
         #Setup optimizer 
         self.batch_size = batch_size
         self.steps = n_steps
-        self.opt = optim.Adam(filter(lambda x: x.requires_grad, self.net.parameters()) , lr = lr)
+        #self.opt = optim.Adam(filter(lambda x: x.requires_grad, self.net.parameters()) , lr = lr)
+        params = list(self.gen.parameters()) + list(self.xfeat.parameters())
+        self.opt = torch.optim.Adam(params, lr=lr)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.opt, step_size=30_000, gamma=gamma_steplr)
 
         ##################### Synthetic COCO INIT ##########################
@@ -142,7 +149,8 @@ class Trainer():
 
     def train(self):
 
-        self.net.train()
+        #self.net.train()
+        self.xfeat.train()
 
         difficulty = 0.10
 
@@ -216,8 +224,19 @@ class Trainer():
                     continue
 
                 #Forward pass
-                feats1, kpts1, hmap1 = self.net(p1)
-                feats2, kpts2, hmap2 = self.net(p2)
+                feats1, kpts1, hmap1 = self.xfeat(p1)
+                feats2, kpts2, hmap2 = self.xfeat(p2)
+
+                # Generator erzeugt Bilder
+                z = torch.randn((p1.size(0), 100, 1, 1), device=self.dev)
+                gen_images = self.gen(z)
+
+                # XFeat extrahiert Features
+                feats_real, _, _ = self.xfeat(p1)
+                feats_fake, _, _ = self.xfeat(gen_images)
+
+                # Generator + XFeat Feature Loss
+                gen_loss, rec_loss, feat_loss = combined_generator_feature_loss(gen_images, p1, feats_fake, feats_real)
 
                 loss_items = []
 
@@ -232,7 +251,8 @@ class Trainer():
                     #grab heatmaps at corresponding idxs
                     h1 = hmap1[b, 0, pts1[:,1].long(), pts1[:,0].long()]
                     h2 = hmap2[b, 0, pts2[:,1].long(), pts2[:,0].long()]
-                    coords1 = self.net.fine_matcher(torch.cat([m1, m2], dim=-1))
+                    #coords1 = self.net.fine_matcher(torch.cat([m1, m2], dim=-1))
+                    coords1 = self.xfeat.fine_matcher(torch.cat([m1, m2], dim=-1))
 
                     #Compute losses
                     loss_ds, conf = dual_softmax_loss(m1, m2)
@@ -259,20 +279,28 @@ class Trainer():
                 loss = torch.cat(loss_items, -1).mean()
                 loss_coarse = loss_ds.item()
                 loss_coord = loss_coords.item()
-                loss_coord = loss_coords.item()
+                #loss_coord = loss_coords.item()
                 loss_kp_pos = loss_kp_pos.item()
                 loss_l1 = loss_kp.item()
 
                 # Compute Backward Pass
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.)
+                total_loss = loss + gen_loss
+                total_loss.backward()
+                #torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.)
+                torch.nn.utils.clip_grad_norm_(self.gen.parameters(), 1.)
+                torch.nn.utils.clip_grad_norm_(self.xfeat.parameters(), 1.)
                 self.opt.step()
                 self.opt.zero_grad()
                 self.scheduler.step()
 
                 if (i+1) % self.save_ckpt_every == 0:
                     print('saving iter ', i+1)
-                    torch.save(self.net.state_dict(), self.ckpt_save_path + f'/{self.model_name}_{i+1}.pth')
+                    #torch.save(self.net.state_dict(), self.ckpt_save_path + f'/{self.model_name}_{i+1}.pth')
+                    torch.save({
+                        'gen': self.gen.state_dict(),
+                        'xfeat': self.xfeat.state_dict()
+                    }, self.ckpt_save_path + f'/{self.model_name}_{i+1}.pth')
+
 
                 pbar.set_description( 'Loss: {:.4f} acc_c0 {:.3f} acc_c1 {:.3f} acc_f: {:.3f} loss_c: {:.3f} loss_f: {:.3f} loss_kp: {:.3f} #matches_c: {:d} loss_kp_pos: {:.3f} acc_kp_pos: {:.3f}'.format(
                                                                         loss.item(), acc_coarse_0, acc_coarse, acc_coords, loss_coarse, loss_coord, loss_l1, nb_coarse, loss_kp_pos, acc_pos) )
@@ -289,7 +317,9 @@ class Trainer():
                 self.writer.add_scalar('Loss/reliability', loss_l1, i)
                 self.writer.add_scalar('Loss/keypoint_pos', loss_kp_pos, i)
                 self.writer.add_scalar('Count/matches_coarse', nb_coarse, i)
-
+                self.writer.add_scalar('Loss/generator_total', gen_loss.item(), i)
+                self.writer.add_scalar('Loss/generator_reconstruction', rec_loss.item(), i)
+                self.writer.add_scalar('Loss/generator_features', feat_loss.item(), i)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,9 @@
 import torch
 import torch.nn.functional as F
 
-from modules.dataset.megadepth import megadepth_warper
+#from modules.dataset.megadepth import megadepth_warper
+from accelerated_features.modules.dataset.megadepth import megadepth_warper
+
 
 from modules.training import utils
 
@@ -223,12 +225,47 @@ def hard_triplet_loss(X,Y, margin = 0.5):
 
     return loss.mean()
 
+# def combined_generator_feature_loss(x_gen, x_real, f_gen, f_real, alpha=1.0):
+#     """
+#     Kombinierter Verlust für Generator + XFeat Featurevergleich
+#     - x_gen, x_real: [B,C,H,W] → Bilder (z.B. 3×256×256)
+#     - f_gen, f_real: [B,N,C]   → extrahierte Featurepunkte (z. B. von XFeat)
+#     """
+#     # Rekonstruktions-Loss (Pixelweise)
+#     loss_recon = F.l1_loss(x_gen, x_real)
+
+#     # Feature-Loss (z. B. Cosine Distance)
+#     if f_gen.size() != f_real.size():
+#         min_len = min(f_gen.size(1), f_real.size(1))
+#         f_gen = f_gen[:, :min_len, :]
+#         f_real = f_real[:, :min_len, :]
+    
+#     loss_feat = F.cosine_embedding_loss(
+#         f_gen.reshape(-1, f_gen.size(-1)),
+#         f_real.reshape(-1, f_real.size(-1)),
+#         torch.ones(f_gen.numel() // f_gen.size(-1), device=f_gen.device)
+#     )
+
+#     # Kombiniert
+#     loss_total = loss_recon + alpha * loss_feat
+#     return loss_total, loss_recon, loss_feat
+
+
+# Kein Gradientenfluss durch echtes Bild oder Features - Trennung Tensor vom Autograd-Graphen
 def combined_generator_feature_loss(x_gen, x_real, f_gen, f_real, alpha=1.0):
     """
     Kombinierter Verlust für Generator + XFeat Featurevergleich
     - x_gen, x_real: [B,C,H,W] → Bilder (z.B. 3×256×256)
     - f_gen, f_real: [B,N,C]   → extrahierte Featurepunkte (z. B. von XFeat)
     """
+
+    # Verhindere Gradientenfluss durch x_real und f_real
+    # x_real = x_real.detach()
+    # f_real = f_real.detach()
+    x_real = x_real.detach().requires_grad_(False)
+    f_real = f_real.detach().requires_grad_(False)
+
+
     # Rekonstruktions-Loss (Pixelweise)
     loss_recon = F.l1_loss(x_gen, x_real)
 
@@ -237,14 +274,17 @@ def combined_generator_feature_loss(x_gen, x_real, f_gen, f_real, alpha=1.0):
         min_len = min(f_gen.size(1), f_real.size(1))
         f_gen = f_gen[:, :min_len, :]
         f_real = f_real[:, :min_len, :]
-    
+
+    # Cosine-Embedding-Loss benötigt ein Target-Label (+1) für Ähnlichkeit
+    target = torch.ones(f_gen.size(0) * f_gen.size(1), device=f_gen.device)
     loss_feat = F.cosine_embedding_loss(
         f_gen.reshape(-1, f_gen.size(-1)),
         f_real.reshape(-1, f_real.size(-1)),
-        torch.ones(f_gen.numel() // f_gen.size(-1), device=f_gen.device)
+        target
     )
 
     # Kombiniert
     loss_total = loss_recon + alpha * loss_feat
     return loss_total, loss_recon, loss_feat
+
 

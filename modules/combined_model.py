@@ -24,15 +24,33 @@ from modules.iccv_Generator import ICCVGenerator
 from modules.xfeat import XFeat  # oder relativer Import, falls nötig
 
 class CombinedModel(nn.Module):
+    # def __init__(self, weights_path, target_size=(480, 480), top_k=3000):
+    #     super().__init__()
+    #     self.gen = ICCVGenerator()
+    #     self.gen.load_weights(f"{weights_path}/tuned_G_119.pth")
+    #     self.target_size = target_size
+
+    #     # XFeat-Modell laden (ggf. mit pretrained=False wenn du trainieren willst)
+    #     self.xfeat = XFeat(top_k=top_k)
+
     def __init__(self, weights_path, target_size=(480, 480), top_k=3000):
         super().__init__()
-        self.gen = ICCVGenerator()
-        self.gen.load_weights(f"{weights_path}/tuned_G_119.pth")
-        self.target_size = target_size
+        self.gen = ICCVGenerator()      # Initalisiert den Generator
+        self.xfeat = XFeat(top_k=top_k)     # Initialisiert das XFeat-Modell zur Keypoint-Detektion & Beschreibung
 
-        # XFeat-Modell laden (ggf. mit pretrained=False wenn du trainieren willst)
-        self.xfeat = XFeat(top_k=top_k)
+        try:
+            ckpt = torch.load(f"{weights_path}/combined.pth", map_location='cpu')
+            self.gen.load_state_dict(ckpt['gen'])       # Lädt die gespeicherten Gewichte
+            self.xfeat.load_state_dict(ckpt['xfeat'])
+            print("✓ Combined weights geladen.")
+        except FileNotFoundError:
+            print("Combined weights nicht gefunden – verwende nur Generator-Gewichte.")
+            self.gen.load_weights(f"{weights_path}/tuned_G_119.pth")    # Lädt nur die vortrainierten Generator-Gewichte
 
+        self.gen.eval()     # Setzt den Generator in den Eval-Modus
+        self.xfeat.eval()       # Setzt xFeat in den Eval-Modus
+        self.target_size = target_size  # Speichert die Zielgröße für spätere Bildskalierung
+ 
     def forward(self, z_input, label_img, context_img):
         # 1. Generator erzeugt deformiertes Bild
         x_gen = self.gen(z_input, label_img, context_img)
@@ -94,8 +112,6 @@ class CombinedModel(nn.Module):
         mkpts1 = features_gen['keypoints'][idx1].cpu().numpy()
 
         return mkpts0, mkpts1, img_gen
-
-
 
 
 
