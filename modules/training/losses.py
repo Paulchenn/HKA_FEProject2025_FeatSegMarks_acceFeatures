@@ -222,3 +222,29 @@ def hard_triplet_loss(X,Y, margin = 0.5):
     loss = torch.clamp(margin + dist_pos - hard_neg, min=0.)
 
     return loss.mean()
+
+def combined_generator_feature_loss(x_gen, x_real, f_gen, f_real, alpha=1.0):
+    """
+    Kombinierter Verlust für Generator + XFeat Featurevergleich
+    - x_gen, x_real: [B,C,H,W] → Bilder (z.B. 3×256×256)
+    - f_gen, f_real: [B,N,C]   → extrahierte Featurepunkte (z. B. von XFeat)
+    """
+    # Rekonstruktions-Loss (Pixelweise)
+    loss_recon = F.l1_loss(x_gen, x_real)
+
+    # Feature-Loss (z. B. Cosine Distance)
+    if f_gen.size() != f_real.size():
+        min_len = min(f_gen.size(1), f_real.size(1))
+        f_gen = f_gen[:, :min_len, :]
+        f_real = f_real[:, :min_len, :]
+    
+    loss_feat = F.cosine_embedding_loss(
+        f_gen.reshape(-1, f_gen.size(-1)),
+        f_real.reshape(-1, f_real.size(-1)),
+        torch.ones(f_gen.numel() // f_gen.size(-1), device=f_gen.device)
+    )
+
+    # Kombiniert
+    loss_total = loss_recon + alpha * loss_feat
+    return loss_total, loss_recon, loss_feat
+

@@ -17,11 +17,9 @@ from modules.xfeat import XFeat
 
 #from modules.match_utils import draw_matches  # optional, falls du Matches anzeigen willst
 
-
 # Pfad zu den Gewichten des Generators
 weights_path = "/app/code"
 iccv_output_wrapper = CombinedModel(weights_path)
-
 
 def argparser():
     parser = argparse.ArgumentParser(description="Real-time demo using Generator and optional matching.")
@@ -29,8 +27,10 @@ def argparser():
     parser.add_argument('--height', type=int, default=480)
     parser.add_argument('--cam', type=int, default=0)
     parser.add_argument('--max_kpts', type=int, default=3000)
-    parser.add_argument('--method', type=str, choices=['none', 'XFeat'], default='none',
-                        help="Optional: apply feature matching in realtime")        # Matching-Methode
+    # parser.add_argument('--method', type=str, choices=['none', 'XFeat'], default='none',
+    #                     help="Optional: apply feature matching in realtime")        # Matching-Methode
+    parser.add_argument('--method', type=str, choices=['none', 'XFeat'], default='XFeat',
+                        help="Optional: apply feature matching in realtime")
     parser.add_argument('--model-path', type=str, default=None,         # Pfad zum xFeat-Modell
                         help="Pfad zum trainierten XFeat-Modell (.pt oder .pth)")
     return parser.parse_args()
@@ -41,7 +41,12 @@ class FrameGrabber(threading.Thread):
     def __init__(self, cap):
         super().__init__()
         self.cap = cap
-        _, self.frame = self.cap.read()     # Ein erstes Bild holen
+        #_, self.frame = self.cap.read()     # Ein erstes Bild holen
+        ret, self.frame = self.cap.read()
+        if not ret:
+            print("Fehler beim ersten Kamerabild! Überprüfe Kamera-Index oder Zugriff.")
+            self.frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
         self.running = False
 
     def run(self):
@@ -72,14 +77,22 @@ class GeneratorDemo:
         self.frame_grabber = FrameGrabber(self.cap)
         self.frame_grabber.start()
         # Optional: XFeat für Matching laden
-        if args.method == "XFeat":
-            self.matcher = XFeat(top_k=args.max_kpts, weights=args.model_path)
+        # if args.method == "XFeat":
+        #     self.matcher = XFeat(top_k=args.max_kpts, weights=args.model_path)
+        # else:
+        #     self.matcher = None
+
+        self.matcher_enabled = args.method == "XFeat"
+
+        # if self.matcher is not None:
+        #     print("XFeat matcher initialisiert:", self.matcher)
+        # else:
+        #     print("Kein Matcher geladen – verwende --method XFeat")
+
+        if self.matcher_enabled:
+            print("Matching mit CombinedModel/XFeat aktiviert.")
         else:
-            self.matcher = None
-        if self.matcher is not None:
-            print("XFeat matcher initialisiert:", self.matcher)
-        else:
-            print("Kein Matcher geladen – verwende --method XFeat")
+            print("Kein Matching – verwende --method XFeat, um Feature-Matching zu aktivieren.")
 
 
         # Fenster für die Anzeige vorbereiten
@@ -144,18 +157,33 @@ class GeneratorDemo:
 
     def main_loop(self):
         while True:
+            # frame = self.frame_grabber.get_last_frame()
             frame = self.frame_grabber.get_last_frame()
+            if frame is None:
+                print("WARNUNG: Frame ist None")
+                continue
+            if frame.sum() == 0:
+                print("WARNUNG: Kamera-Frame ist schwarz (nur Nullen?)")
+
+            cv2.imshow("RAW Kamera", frame)
+
             if frame is None:
                 continue
 
             z_input = torch.randn(1, 100, 1, 1)
-            label_img = self.preprocess(frame)
+            # label_img = self.preprocess(frame)
+            label_img = iccv_output_wrapper.preprocess_for_generator(frame)
+
 
             context_img = self.preprocess(frame)
 
             with torch.no_grad():
-                output = iccv_output_wrapper(z_input, label_img, context_img)
-                out_np = self.postprocess(output)
+                # output = iccv_output_wrapper(z_input, label_img, context_img)
+                # out_np = self.postprocess(output)
+                features, out_img = iccv_output_wrapper(z_input, label_img, context_img)
+                print("Generator output:", out_img.shape, out_img.min().item(), out_img.max().item())
+                out_np = self.postprocess(out_img)
+
 
             # if self.matcher is not None:
             #     mkpts0, mkpts1 = self.matcher.match_xfeat(frame, out_np)
@@ -168,8 +196,11 @@ class GeneratorDemo:
             #         match_vis = self.draw_matches_window(frame.copy(), out_np.copy(), mkpts0, mkpts1)
             #         cv2.imshow("Matched Keypoints", match_vis)
 
-            if self.matcher is not None:
-                mkpts0, mkpts1 = self.matcher.match_xfeat(frame, out_np)
+            # if self.matcher is not None:
+            #     mkpts0, mkpts1 = self.matcher.match_xfeat(frame, out_np)
+            if self.matcher_enabled:
+                mkpts0, mkpts1, _ = iccv_output_wrapper.match_generated(frame)
+
 
                 if mkpts0 is not None and mkpts1 is not None:
                     print(f"Matched keypoints: {len(mkpts0)} ↔ {len(mkpts1)}")

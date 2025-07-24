@@ -332,7 +332,7 @@ class XFeat(nn.Module):
 		return torch.cat([mkpts_0, mkpts_1], dim=-1)
 
 	@torch.inference_mode()
-	def match(self, feats1, feats2, min_cossim = 0.82):
+	def match(self, feats1, feats2, min_cossim = 0.82):		# Wenn zu wenig Matches sind, dann auf 0.75 setzen
 
 		cossim = feats1 @ feats2.t()
 		cossim_t = feats2 @ feats1.t()
@@ -407,4 +407,32 @@ class XFeat(nn.Module):
 		if isinstance(x, np.ndarray):
 			x = torch.tensor(x).permute(0,3,1,2)/255
 
-		return x
+		return x.to(self.dev)
+	
+# NEU	
+def combined_generator_feature_loss(x_gen, x_real, f_gen, f_real, alpha=1.0):
+    """
+    Kombinierter Verlust für Generator + XFeat Featurevergleich
+    - x_gen, x_real: [B,C,H,W] → Bilder (z.B. 3×256×256)
+    - f_gen, f_real: [B,N,C]   → extrahierte Featurepunkte (z. B. von XFeat)
+    """
+
+    # Rekonstruktions-Loss (Pixelweise)
+    loss_recon = F.l1_loss(x_gen, x_real)
+
+    # Feature-Loss (z. B. Cosine Distance)
+    if f_gen.size() != f_real.size():
+        min_len = min(f_gen.size(1), f_real.size(1))
+        f_gen = f_gen[:, :min_len, :]
+        f_real = f_real[:, :min_len, :]
+    
+    loss_feat = F.cosine_embedding_loss(
+        f_gen.reshape(-1, f_gen.size(-1)),
+        f_real.reshape(-1, f_real.size(-1)),
+        torch.ones(f_gen.numel() // f_gen.size(-1), device=f_gen.device)
+    )
+
+    # Kombiniert
+    loss_total = loss_recon + alpha * loss_feat
+    return loss_total, loss_recon, loss_feat
+

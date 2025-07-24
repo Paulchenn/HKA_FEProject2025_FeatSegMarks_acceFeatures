@@ -7,6 +7,8 @@ import argparse
 import os
 import time
 import sys
+from modules.training.losses import combined_generator_feature_loss
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="XFeat training script.")
