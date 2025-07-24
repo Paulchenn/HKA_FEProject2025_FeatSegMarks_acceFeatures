@@ -174,6 +174,9 @@ class XFeat(nn.Module):
 			returns:
 				mkpts_0, mkpts_1 -> np.ndarray (N,2) xy coordinate matches from image1 to image2
 		"""
+		print("match_xfeat wurde aufgerufen")
+		print("Eingabebilder Shapes:", img1.shape, img2.shape)
+
 		if top_k is None: top_k = self.top_k
 		img1 = self.parse_input(img1)
 		img2 = self.parse_input(img2)
@@ -181,7 +184,11 @@ class XFeat(nn.Module):
 		out1 = self.detectAndCompute(img1, top_k=top_k)[0]
 		out2 = self.detectAndCompute(img2, top_k=top_k)[0]
 
+		print("Keypoints Bild 1:", len(out1['keypoints']))
+		print("Keypoints Bild 2:", len(out2['keypoints']))
+
 		idxs0, idxs1 = self.match(out1['descriptors'], out2['descriptors'], min_cossim=min_cossim )
+		print("Matches gefunden:", len(idxs0))
 
 		return out1['keypoints'][idxs0].cpu().numpy(), out2['keypoints'][idxs1].cpu().numpy()
 

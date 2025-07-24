@@ -10,18 +10,31 @@ import cv2
 import torch
 import argparse
 import threading
+import numpy as np
 from modules.combined_model import CombinedModel
+from modules.xfeat import XFeat
+#from accelerated_features.modules.xfeat import XFeat
+
+#from modules.match_utils import draw_matches  # optional, falls du Matches anzeigen willst
+
 
 # Pfad zu den Gewichten des Generators
 weights_path = "/app/code"
 iccv_output_wrapper = CombinedModel(weights_path)
 
+
 def argparser():
-    parser = argparse.ArgumentParser(description="Real-time demo using only the generator.")
+    parser = argparse.ArgumentParser(description="Real-time demo using Generator and optional matching.")
     parser.add_argument('--width', type=int, default=640)
     parser.add_argument('--height', type=int, default=480)
     parser.add_argument('--cam', type=int, default=0)
+    parser.add_argument('--max_kpts', type=int, default=3000)
+    parser.add_argument('--method', type=str, choices=['none', 'XFeat'], default='none',
+                        help="Optional: apply feature matching in realtime")        # Matching-Methode
+    parser.add_argument('--model-path', type=str, default=None,         # Pfad zum xFeat-Modell
+                        help="Pfad zum trainierten XFeat-Modell (.pt oder .pth)")
     return parser.parse_args()
+
 
 # Kontinuierlich das aktuelle Bild der Kamera holen
 class FrameGrabber(threading.Thread):
@@ -58,10 +71,25 @@ class GeneratorDemo:
 
         self.frame_grabber = FrameGrabber(self.cap)
         self.frame_grabber.start()
+        # Optional: XFeat für Matching laden
+        if args.method == "XFeat":
+            self.matcher = XFeat(top_k=args.max_kpts, weights=args.model_path)
+        else:
+            self.matcher = None
+        if self.matcher is not None:
+            print("XFeat matcher initialisiert:", self.matcher)
+        else:
+            print("Kein Matcher geladen – verwende --method XFeat")
+
 
         # Fenster für die Anzeige vorbereiten
         cv2.namedWindow(self.window_name, flags=cv2.WINDOW_GUI_NORMAL)
         cv2.resizeWindow(self.window_name, self.width, self.height)
+
+        # Fenster für gematchte Punkte vorbereiten
+        cv2.namedWindow("Matched Keypoints", flags=cv2.WINDOW_GUI_NORMAL)
+        cv2.resizeWindow("Matched Keypoints", self.width * 2, self.height)
+        cv2.moveWindow("Matched Keypoints", 100, 100)  # Optional: Bildschirmposition
 
     # Kameravorbereitung
     def setup_camera(self):
@@ -95,6 +123,24 @@ class GeneratorDemo:
         img = (img * 255).clip(0, 255).astype('uint8')
         return cv2.resize(img, (self.width, self.height))
 
+    def draw_matches_window(self, img0, img1, mkpts0, mkpts1):
+        # Schutz gegen leere oder ungültige Eingaben
+        if img0 is None or img1 is None or mkpts0 is None or mkpts1 is None or len(mkpts0) == 0 or len(mkpts1) == 0:
+            print("Nothing to draw (no keypoints).")  
+            return np.zeros((self.height, self.width * 2, 3), dtype=np.uint8)
+
+        canvas = np.hstack([img0, img1])
+        offset = img0.shape[1]
+
+        for p0, p1 in zip(mkpts0, mkpts1):
+            x0, y0 = int(p0[0]), int(p0[1])
+            x1, y1 = int(p1[0]) + offset, int(p1[1])
+            cv2.line(canvas, (x0, y0), (x1, y1), (0, 255, 0), 1)
+            cv2.circle(canvas, (x0, y0), 2, (255, 0, 0), -1)
+            cv2.circle(canvas, (x1, y1), 2, (0, 0, 255), -1)
+
+        return canvas
+
 
     def main_loop(self):
         while True:
@@ -110,6 +156,34 @@ class GeneratorDemo:
             with torch.no_grad():
                 output = iccv_output_wrapper(z_input, label_img, context_img)
                 out_np = self.postprocess(output)
+
+            # if self.matcher is not None:
+            #     mkpts0, mkpts1 = self.matcher.match_xfeat(frame, out_np)
+
+            #     # Debug-Ausgabe
+            #     print(f"Matched keypoints: {len(mkpts0)} ↔ {len(mkpts1)}")
+
+            #     # Sichere Prüfung auf gültige Matches
+            #     if mkpts0 is not None and mkpts1 is not None and len(mkpts0) > 0 and len(mkpts1) > 0:
+            #         match_vis = self.draw_matches_window(frame.copy(), out_np.copy(), mkpts0, mkpts1)
+            #         cv2.imshow("Matched Keypoints", match_vis)
+
+            if self.matcher is not None:
+                mkpts0, mkpts1 = self.matcher.match_xfeat(frame, out_np)
+
+                if mkpts0 is not None and mkpts1 is not None:
+                    print(f"Matched keypoints: {len(mkpts0)} ↔ {len(mkpts1)}")
+                else:
+                    print("match_xfeat returned None")
+
+                if mkpts0 is not None and mkpts1 is not None and len(mkpts0) > 0 and len(mkpts1) > 0:
+                    match_vis = self.draw_matches_window(frame.copy(), out_np.copy(), mkpts0, mkpts1)
+                    cv2.imshow("Matched Keypoints", match_vis)
+                else:
+                    print("Keine gültigen Matches zum Anzeigen")
+
+
+
 
             # Bild anzeigen
             cv2.imshow(self.window_name, out_np)
