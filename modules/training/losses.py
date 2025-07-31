@@ -5,7 +5,8 @@ import torch.nn.functional as F
 from accelerated_features.modules.dataset.megadepth import megadepth_warper
 
 
-from modules.training import utils
+#from modules.training import utils
+from accelerated_features.modules.training import utils
 
 from third_party.alike_wrapper import extract_alike_kpts
 

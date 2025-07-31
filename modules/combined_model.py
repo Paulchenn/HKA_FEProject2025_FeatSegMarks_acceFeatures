@@ -20,8 +20,10 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from modules.iccv_Generator import ICCVGenerator
-from modules.xfeat import XFeat  # oder relativer Import, falls nötig
+#from modules.iccv_Generator import ICCVGenerator
+#from modules.xfeat import XFeat 
+from accelerated_features.modules.iccv_Generator import ICCVGenerator
+from accelerated_features.modules.xfeat import XFeat
 
 class CombinedModel(nn.Module):
     # def __init__(self, weights_path, target_size=(480, 480), top_k=3000):

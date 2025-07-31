@@ -12,7 +12,9 @@ import matplotlib.pyplot as plt
 import pdb
 import cv2
 
-from modules.training.utils import plot_corrs
+#from modules.training.utils import plot_corrs
+from accelerated_features.modules.training.utils import plot_corrs
+
 
 @torch.no_grad()
 def warp_kpts(kpts0, depth0, depth1, T_0to1, K0, K1):

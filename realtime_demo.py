@@ -6,16 +6,20 @@
 """
 # nur mit Generator
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import cv2
 import torch
 import argparse
 import threading
 import numpy as np
-from modules.combined_model import CombinedModel
-from modules.xfeat import XFeat
-#from accelerated_features.modules.xfeat import XFeat
+#from modules.combined_model import CombinedModel
+#from modules.xfeat import XFeat
+from accelerated_features.modules.combined_model import CombinedModel
+from accelerated_features.modules.xfeat import XFeat
 
-#from modules.match_utils import draw_matches  # optional, falls du Matches anzeigen willst
 
 # Pfad zu den Gewichten des Generators
 weights_path = "/app/code"

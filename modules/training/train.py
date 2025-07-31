@@ -3,12 +3,27 @@
 	https://www.verlab.dcc.ufmg.br/descriptors/xfeat_cvpr24/
 """
 
-import argparse
+
 import os
-import time
 import sys
-from modules.training.losses import combined_generator_feature_loss
-from modules.iccv_Generator import ICCVGenerator
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
+
+# third_party manuell hinzufügen
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../third_party')))
+
+import argparse
+import time
+#from modules.training.losses import combined_generator_feature_loss
+#from modules.iccv_Generator import ICCVGenerator
+from accelerated_features.modules.training.losses import combined_generator_feature_loss
+from accelerated_features.modules.iccv_Generator import ICCVGenerator
+from accelerated_features.modules.model import *
+from accelerated_features.modules.dataset.augmentation import *
+from accelerated_features.modules.training.utils import *
+from accelerated_features.modules.training.losses import *
+from accelerated_features.modules.dataset.megadepth.megadepth import MegaDepthDataset
+from accelerated_features.modules.dataset.megadepth import megadepth_warper
+
 
 
 def parse_arguments():
