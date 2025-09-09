@@ -3,6 +3,15 @@
 	https://www.verlab.dcc.ufmg.br/descriptors/xfeat_cvpr24/
 """
 
+
+import os
+import sys
+import pdb
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
+
+# third_party manuell hinzufügen
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../third_party')))
+
 import argparse
 import os
 import time
@@ -20,6 +29,10 @@ def parse_arguments():
     parser.add_argument('--training_type', type=str, default='xfeat_default',
                         choices=['xfeat_default', 'xfeat_synthetic', 'xfeat_megadepth'],
                         help='Training scheme. xfeat_default uses both megadepth & synthetic warps.')
+    parser.add_argument('--use_SDbOA', type=bool, default=False,
+                        help='Usage of Prepipeline. If on "True" xFeat will train with pretrainied SDbOA.')
+    parser.add_argument('--path_to_SDbOA_weights', type=str, default='/home/docker/torch/code/accelerated_features/weights/SDbOA_netG.pth',
+                        help='Usage of Prepipeline. If on "True" xFeat will train with pretrainied SDbOA.')
     parser.add_argument('--batch_size', type=int, default=10,
                         help='Batch size for training. Default is 10.')
     parser.add_argument('--n_steps', type=int, default=160_000,
@@ -53,6 +66,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import numpy as np
 
+from modules.SDbOA_model import *
 from modules.model import *
 from modules.dataset.augmentation import *
 from modules.training.utils import *
@@ -74,13 +88,32 @@ class Trainer():
     def __init__(self, megadepth_root_path, 
                        synthetic_root_path, 
                        ckpt_save_path, 
+                       path_to_SDbOA_weights,
                        model_name = 'xfeat_default',
+                       use_SDbOA = 'none',
                        batch_size = 10, n_steps = 160_000, lr= 3e-4, gamma_steplr=0.5, 
                        training_res = (800, 608), device_num="0", dry_run = False,
                        save_ckpt_every = 500):
 
         self.dev = torch.device ('cuda' if torch.cuda.is_available() else 'cpu')
+        #self.net = XFeatModel().to(self.dev)
+
+        # import net for prepipeline SDbOA
+        if use_SDbOA:
+            pdb.set_trace()
+            self.gen = generator(img_size=256, z_dim=100).to(self.dev)
+            try:
+                checkpoint = torch.load(path_to_SDbOA_weights, map_location=self.dev)
+                self.gen.load_state_dict(checkpoint)
+                print(f"Loaded SDbOA Generator-Checkpoints from {path_to_SDbOA_weights}.")
+            except:
+                print(f"Failed to load SDbOA Generator-Checkpoints from {path_to_SDbOA_weights}.")
+            self.gen.eval()
+
+
+        # import xFeat Net/Modell
         self.net = XFeatModel().to(self.dev)
+
 
         #Setup optimizer 
         self.batch_size = batch_size
@@ -297,6 +330,8 @@ if __name__ == '__main__':
         synthetic_root_path=args.synthetic_root_path, 
         ckpt_save_path=args.ckpt_save_path,
         model_name=args.training_type,
+        use_SDbOA=args.use_SDbOA,
+        path_to_SDbOA_weights=args.path_to_SDbOA_weights,
         batch_size=args.batch_size,
         n_steps=args.n_steps,
         lr=args.lr,
