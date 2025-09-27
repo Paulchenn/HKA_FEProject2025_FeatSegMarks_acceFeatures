@@ -17,6 +17,7 @@ import copy
 
 import tqdm
 
+
 # Disable scientific notation
 np.set_printoptions(suppress=True)
 
@@ -197,7 +198,7 @@ def compute_maa(pairs, thresholds=[5, 10, 20]):
     
 
 @torch.inference_mode()
-def run_pose_benchmark(matcher_fn, loader, ransac_thr=2.5):
+def run_pose_benchmark(matcher_fn, loader, deformer=None, ransac_thr=2.5):
     """
         Run relative pose estimation benchmark using a specified matcher function and data loader.
 
@@ -220,11 +221,22 @@ def run_pose_benchmark(matcher_fn, loader, ransac_thr=2.5):
     cnt = 0
     for d in tqdm.tqdm(loader):
         d_error = {}
-        src_pts, dst_pts = matcher_fn(tensor2bgr(d['image0']), tensor2bgr(d['image1']))
+
+        p1 = d['image0']
+        p2 = d['image1']
+
+        if deformer:
+            if d is not None:
+                p1, grid    = deformer(x=p1, blend_alpha=1, use_tsd=False, grid=None)
+                p2, _       = deformer(x=p2, blend_alpha=1, use_tsd=False, grid=grid)
+                
+        src_pts, dst_pts = matcher_fn(tensor2bgr(p1), tensor2bgr(p2))
 
         #delete images to avoid OOM, happens in low mem machines
         del d['image0']
         del d['image1']
+        del p1
+        del p2
 
         #rescale kpts
         src_pts = src_pts * d['scale0'].numpy()
@@ -244,6 +256,16 @@ def parse_args():
                         help="Matcher to use (xfeat or alike)")
     parser.add_argument('--ransac-thr', type=float, default=2.5,
                         help="RANSAC threshold value in pixels (default: 2.5)")
+    parser.add_argument('--weights-path', type=str, required=False, default=None,
+                        help="Path to custom weights / pt file if wanted.")
+    parser.add_argument('--use_SDbOA', action='store_true',
+                        help='Usage of Prepipeline. If on "True" xFeat will train with pretrainied SDbOA.')
+    parser.add_argument('--path_to_SDbOA', type=str, default='/home/docker/torch/code/SDbOA',
+                        help='Path to RePo of SDbOA.')
+    parser.add_argument('--path_to_SDbOA_weights', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
+    parser.add_argument('--path_to_SDbOA_config', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
     return parser.parse_args()
 
 
@@ -256,11 +278,39 @@ if __name__ == '__main__':
 
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
+    if args.use_SDbOA:
+        sys.path.insert(0, args.path_to_SDbOA)
+        from models import generation_imageNet_V2_2 as SDbOA_model
+        from modules.dataset.shapeDeformation import *
+        dev='cuda'
+        gen = SDbOA_model.generator(img_size=256, z_dim=100).to(dev)
+        try:
+            checkpoint = torch.load(args.path_to_SDbOA_weights, map_location=dev)
+            gen.load_state_dict(checkpoint)
+            print(f"Loaded SDbOA Generator-Checkpoints from {args.path_to_SDbOA_weights}.")
+        except:
+            print(f"Failed to load SDbOA Generator-Checkpoints from {args.path_to_SDbOA_weights}.")
+        gen.eval()
+
+        with open(args.path_to_SDbOA_config, 'r') as f:
+            SDbOA_config = json.load(f)
+
+        deformer = shapeDeformation(
+            device = 'cuda',
+            config = SDbOA_config,
+            netG = gen
+        )
+    else:
+        deformer=None
+
     if args.matcher == 'xfeat':
         print("Running benchmark for XFeat..")
         from modules.xfeat import XFeat
-        xfeat = XFeat()
-        run_pose_benchmark(matcher_fn = xfeat.match_xfeat, loader = loader, ransac_thr = args.ransac_thr)
+        if args.weights_path == None:
+            xfeat = XFeat()
+        else:
+            xfeat = XFeat(weights=args.weights_path)
+        run_pose_benchmark(matcher_fn = xfeat.match_xfeat, deformer=deformer, loader = loader, ransac_thr = args.ransac_thr)
 
     elif args.matcher == 'xfeat-star':
         from modules.xfeat import XFeat

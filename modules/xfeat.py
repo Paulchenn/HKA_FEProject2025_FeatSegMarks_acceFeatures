@@ -65,7 +65,7 @@ class XFeat(nn.Module):
 		x, rh1, rw1 = self.preprocess_tensor(x)
 
 		B, _, _H1, _W1 = x.shape
-        
+        #TODO: implement usage of netG without deformation (TSD)
 		M1, K1, H1 = self.net(x)
 		M1 = F.normalize(M1, dim=1)
 
