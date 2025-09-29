@@ -280,7 +280,7 @@ if __name__ == '__main__':
 
     if args.use_SDbOA:
         sys.path.insert(0, args.path_to_SDbOA)
-        from models import generation_imageNet_V2_2 as SDbOA_model
+        from models import generation_imageNet_V2_3 as SDbOA_model
         from modules.dataset.shapeDeformation import *
         dev='cuda'
         gen = SDbOA_model.generator(img_size=256, z_dim=100).to(dev)

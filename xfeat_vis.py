@@ -20,6 +20,7 @@ import torch
 import json
 import sys
 from modules.xfeat import XFeat
+from torchvision.transforms.functional import rotate
 
 # ----------------------------- Utils -----------------------------
 
@@ -96,6 +97,7 @@ def draw_matches(img1_rgb, img2_rgb, kpts1, kpts2, max_draw=500, thickness=1):
     n = min(len(kpts1), len(kpts2), max_draw)
     if n == 0:
         return vis
+    vis = np.ascontiguousarray(vis, dtype=np.uint8)
     idx = np.random.choice(len(kpts1), size=n, replace=False)
     pts1 = kpts1[idx]
     pts2 = kpts2[idx].copy()
@@ -132,6 +134,26 @@ def parse_args():
                         help='Path to weights of SDbOA')
     return ap.parse_args()
 
+def _rotate_to_landscape(x: torch.Tensor):
+        """
+        Wenn H>W -> rotiere 90° (CCW) in Landscape.
+        Gibt (x_rot, was_rotated: bool) zurück.
+        """
+        B, C, H, W = x.shape
+        is_rot = False
+        if H > W:
+            x = rotate(img=x, angle=90, expand=True)
+            is_rot = True
+        return x, is_rot
+
+def _undo_rotate(x: torch.Tensor, was_rotated: bool):
+    """
+    Dreht ggf. 90° zurück (CW), falls vorher rotiert wurde.
+    """
+    if was_rotated:
+        return rotate(img=x, angle=270, expand=True)
+    return x
+
 # ----------------------------- Main -----------------------------
 
 def main(args):
@@ -149,7 +171,19 @@ def main(args):
 
     # Bilder deformiern
     if args.use_SDbOA:
-        gen = SDbOA_model.generator(img_size=256, z_dim=100).to(device)
+        with open(args.path_to_SDbOA_config, 'r') as f:
+            SDbOA_config = json.load(f)
+
+        # get image sizes
+        img_h = int(getattr(SDbOA_config, "image_height", 608))
+        img_w = int(getattr(SDbOA_config, "image_width", 800))
+
+        # gen = SDbOA_model.generator(img_size=256, z_dim=100).to(device)
+        gen    = SDbOA_model.generator(
+            img_size=(img_h, img_w),
+            z_dim=getattr(SDbOA_config, "noise_size", 100),
+            decoder_relu=True
+        ).to(device)
         try:
             checkpoint = torch.load(args.path_to_SDbOA_weights, map_location=device)
             gen.load_state_dict(checkpoint)
@@ -158,11 +192,8 @@ def main(args):
             print(f"Failed to load SDbOA Generator-Checkpoints from {args.path_to_SDbOA_weights}.")
         gen.eval()
 
-        with open(args.path_to_SDbOA_config, 'r') as f:
-            SDbOA_config = json.load(f)
-
         deformer = shapeDeformation(
-            device = 'cuda',
+            device = device,
             config = SDbOA_config,
             netG = gen
         )
@@ -181,9 +212,17 @@ def main(args):
     t1 = to_tensor(img1_rgb).to(device)
     t2 = to_tensor(img2_rgb).to(device)
 
-    # deform
-    t1, grid    = deformer(x=t1, blend_alpha=1, use_tsd=False, grid=None)
-    t2, _       = deformer(x=t2, blend_alpha=1, use_tsd=False, grid=grid)
+    # 1) if needed turn images to landscape
+    t1_rot, t1_was_rot = _rotate_to_landscape(t1)
+    t2_rot, t2_was_rot = _rotate_to_landscape(t2)
+
+    # 2) do deformation
+    t1_def, grid    = deformer(x=t1_rot, blend_alpha=1, use_tsd=True, grid=None)
+    t2_def, _       = deformer(x=t2_rot, blend_alpha=1, use_tsd=True, grid=grid)
+
+    # 3) turn back to original
+    t1 = _undo_rotate(t1_def, t1_was_rot)
+    t2 = _undo_rotate(t2_def, t2_was_rot)
     
     with torch.inference_mode():
         out1 = xfeat.detectAndCompute(t1, top_k=args.top_k)[0]
@@ -263,7 +302,7 @@ if __name__ == "__main__":
 
     if args.use_SDbOA:
         sys.path.insert(0, args.path_to_SDbOA)
-        from models import generation_imageNet_V2_2 as SDbOA_model
+        from models import generation_imageNet_V2_3 as SDbOA_model
         from modules.dataset.shapeDeformation import *
 
     main(args)

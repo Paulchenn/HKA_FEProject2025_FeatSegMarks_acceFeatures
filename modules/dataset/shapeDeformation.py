@@ -51,8 +51,8 @@ class shapeDeformation:
         self.config = config
 
         # --- Generator input resolution & noise dim (match SDbOA training)
-        self.G_RES_WIDTH = getattr(self.config, "image_height", 608)
-        self.G_RES_HEIGHT = getattr(self.config, "image_width", 800)
+        self.G_RES_HEIGHT= getattr(self.config, "image_height", 608)
+        self.G_RES_WIDTH = getattr(self.config, "image_width", 800)
         self.Z_DIM = getattr(self.config, "noise_size", 100)
 
         # --- Keep geometry by default (Stage-1-like). If you set this to 1 we'll apply TSD.
@@ -106,30 +106,25 @@ class shapeDeformation:
         B, C, H, W = x.shape
         x_dev = x.to(self.device)
 
-        # # Detect input range and create converters to preserve it
-        # x_min, x_max = float(x_dev.min().item()), float(x_dev.max().item())
-        # if x_min >= -1.05 and x_max <= 1.05:
-        #     in_mode = 'minus1_1'  # [-1,1]
-        #     x_n = x_dev.clone()
-        # else:
-        #     in_mode = 'zero_1'    # assume [0,1] (or 0..255 already normalized upstream)
-        #     x_n = (x_dev - 0.5) / 0.5
+        # Detect input range and create converters to preserve it
+        x_min, x_max = float(x_dev.min().item()), float(x_dev.max().item())
+        if x_min >= -1.05 and x_max <= 1.05:
+            in_mode = 'minus1_1'  # [-1,1]
+            x_n = x_dev.clone()
+        else:
+            in_mode = 'zero_1'    # assume [0,1] (or 0..255 already normalized upstream)
+            x_n = (x_dev - 0.5) / 0.5
 
-        # # Ensure 3ch for the pipeline (generator expects RGB-like)
-        # if x_n.shape[1] == 1:
-        #     x_rgb = x_n.repeat(1, 3, 1, 1)
-        # else:
-        #     x_rgb = x_n
+        # Ensure 3ch for the pipeline (generator expects RGB-like)
+        if x_n.shape[1] == 1:
+            x_rgb = x_n.repeat(1, 3, 1, 1)
+        else:
+            x_rgb = x_n
 
-        # # --- Prepare square input for netG to keep its receptive fields sane
-        # # Center-crop the shorter side to square and resize to G_RES
-        # side = min(H, W)
-        # y0 = (H - side) // 2
-        # x0 = (W - side) // 2
-        # crop = x_rgb[:, :, y0:y0 + side, x0:x0 + side]
-        # crop = self._resize(crop)
-        if self.debug_prints:
-            print(f"x_dev shape: {x_dev.shape}")
+        # --- Prepare square input for netG to keep its receptive fields sane
+        # Center-crop the shorter side to square and resize to G_RES
+        crop = self._resize(x_rgb)
+        x_dev = crop
 
         # --- Blur branch (I_txt)
         blur = blur_image(x_dev, downSize=getattr(self.config, "downSize2", 32))
@@ -149,12 +144,14 @@ class shapeDeformation:
             z_ = Variable(torch.randn((B, zdim)).view(-1, 100, 1, 1).to(self.device))
             if self.debug_prints:
                 print(f"[Deformer][call] shape z_: {z_.shape}")
-                print(f"[Deformer][call] shape edge_def: {edge_def.shape}")
+                print(f"[Deformer][call] shape x_dev: {x_dev.shape}")
                 print(f"[Deformer][call] shape blur: {blur.shape}")
+                print(f"[Deformer][call] shape edge_def: {edge_def.shape}")
 
                 fig = plt.figure(figsize=(10.5, 8))
-                plt.subplot(1, 2, 1); plt.title('edge map'); plt.imshow(self._to_numpy_img(edge_def))
-                plt.subplot(1, 2, 2); plt.title('blur img'); plt.imshow(self._to_numpy_img(blur))
+                plt.subplot(1, 3, 1); plt.title('img'); plt.imshow(self._to_numpy_img(x_dev))
+                plt.subplot(1, 3, 2); plt.title('blur img'); plt.imshow(self._to_numpy_img(blur))
+                plt.subplot(1, 3, 3); plt.title('edge map'); plt.imshow(self._to_numpy_img(edge_def))
                 plt.tight_layout()
                 plt.show()       # show the window (non-blocking)
             gen = self.netG(z_, edge_def, blur)  # [-1,1]
