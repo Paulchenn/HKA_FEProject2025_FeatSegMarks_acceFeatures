@@ -51,8 +51,8 @@ class shapeDeformation:
         self.config = config
 
         # --- Generator input resolution & noise dim (match SDbOA training)
-        self.G_RES_HEIGHT= getattr(self.config, "image_height", 608)
-        self.G_RES_WIDTH = getattr(self.config, "image_width", 800)
+        self.G_RES_HEIGHT = getattr(self.config, "image_height", 608)
+        self.G_RES_WIDTH  = getattr(self.config, "image_width", 800)
         self.Z_DIM = getattr(self.config, "noise_size", 100)
 
         # --- Keep geometry by default (Stage-1-like). If you set this to 1 we'll apply TSD.
@@ -125,6 +125,8 @@ class shapeDeformation:
         # Center-crop the shorter side to square and resize to G_RES
         crop = self._resize(x_rgb)
         x_dev = crop
+        if self.debug_prints:
+            print(f"x_dev shape: {x_dev.shape}")
 
         # --- Blur branch (I_txt)
         blur = blur_image(x_dev, downSize=getattr(self.config, "downSize2", 32))
