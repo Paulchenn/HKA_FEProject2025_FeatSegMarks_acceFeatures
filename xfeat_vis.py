@@ -217,8 +217,8 @@ def main(args):
     t2_rot, t2_was_rot = _rotate_to_landscape(t2)
 
     # 2) do deformation
-    t1_def, grid    = deformer(x=t1_rot, blend_alpha=1, use_tsd=True, grid=None)
-    t2_def, _       = deformer(x=t2_rot, blend_alpha=1, use_tsd=True, grid=grid)
+    t1_def, grid    = deformer(x=t1_rot, blend_alpha=1, use_tsd=False, grid=None)
+    t2_def, _       = deformer(x=t2_rot, blend_alpha=1, use_tsd=False, grid=grid)
 
     # 3) turn back to original
     t1 = _undo_rotate(t1_def, t1_was_rot)
@@ -299,6 +299,7 @@ def main(args):
 if __name__ == "__main__":
 
     args = parse_args()
+    print(args.path_to_SDbOA)
 
     if args.use_SDbOA:
         sys.path.insert(0, args.path_to_SDbOA)
