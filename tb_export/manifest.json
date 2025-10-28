@@ -1,0 +1,19 @@
+{
+  "input_arg": "/home/docker/torch/data/xfeat_training_genMegaDepth_DS32_TSD0_035/logdir/xfeat_default_2025_09_25-18_14_33",
+  "resolved_event_file": "/home/docker/torch/data/xfeat_training_genMegaDepth_DS32_TSD0_035/logdir/xfeat_default_2025_09_25-18_14_33/events.out.tfevents.1758816873.IRP-KUKA.195213.0",
+  "backend": "tensorboard",
+  "num_tags": 10,
+  "tags": [
+    "Accuracy/coarse_mdepth",
+    "Accuracy/coarse_synth",
+    "Accuracy/fine_mdepth",
+    "Accuracy/kp_position",
+    "Count/matches_coarse",
+    "Loss/coarse",
+    "Loss/fine",
+    "Loss/keypoint_pos",
+    "Loss/reliability",
+    "Loss/total"
+  ],
+  "generated_at": "2025-09-29T23:21:06.179943+00:00"
+}

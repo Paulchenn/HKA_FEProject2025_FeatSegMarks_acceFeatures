@@ -3,6 +3,15 @@
 	https://www.verlab.dcc.ufmg.br/descriptors/xfeat_cvpr24/
 """
 
+
+import os
+import sys
+import pdb
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
+
+# third_party manuell hinzufügen
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../third_party')))
+
 import argparse
 import os
 import time
@@ -20,6 +29,14 @@ def parse_arguments():
     parser.add_argument('--training_type', type=str, default='xfeat_default',
                         choices=['xfeat_default', 'xfeat_synthetic', 'xfeat_megadepth'],
                         help='Training scheme. xfeat_default uses both megadepth & synthetic warps.')
+    parser.add_argument('--use_SDbOA', action='store_true',
+                        help='Usage of Prepipeline. If on "True" xFeat will train with pretrainied SDbOA.')
+    parser.add_argument('--path_to_SDbOA', type=str, default='/home/docker/torch/code/SDbOA',
+                        help='Path to RePo of SDbOA.')
+    parser.add_argument('--path_to_SDbOA_weights', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
+    parser.add_argument('--path_to_SDbOA_config', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
     parser.add_argument('--batch_size', type=int, default=10,
                         help='Batch size for training. Default is 10.')
     parser.add_argument('--n_steps', type=int, default=160_000,
@@ -44,17 +61,23 @@ def parse_arguments():
     return args
 
 args = parse_arguments()
+sys.path.insert(0, args.path_to_SDbOA)
 
+import json
 import torch
 from torch import nn
 from torch import optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import make_grid, save_image
+from torchvision.transforms.functional import rotate
 
 import numpy as np
 
+from models import generation_imageNet_V2_3 as SDbOA_model
 from modules.model import *
 from modules.dataset.augmentation import *
+from modules.dataset.shapeDeformation import *
 from modules.training.utils import *
 from modules.training.losses import *
 
@@ -74,13 +97,43 @@ class Trainer():
     def __init__(self, megadepth_root_path, 
                        synthetic_root_path, 
                        ckpt_save_path, 
+                       path_to_SDbOA_weights = '',
+                       path_to_SDbOA_config = '',
                        model_name = 'xfeat_default',
+                       use_SDbOA = 'none',
                        batch_size = 10, n_steps = 160_000, lr= 3e-4, gamma_steplr=0.5, 
                        training_res = (800, 608), device_num="0", dry_run = False,
                        save_ckpt_every = 500):
 
         self.dev = torch.device ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.use_SDbOA = use_SDbOA
+
+
+        self.save_before_and_after = True
+
+        # import net for prepipeline SDbOA
+        if self.use_SDbOA:
+            with open(path_to_SDbOA_config, 'r') as f:
+                SDbOA_config = json.load(f)
+            img_h = int(getattr(SDbOA_config, "image_height", 608))
+            img_w = int(getattr(SDbOA_config, "image_width", 800))
+            self.gen = SDbOA_model.generator(
+                img_size=(img_h, img_w),
+                z_dim=getattr(SDbOA_config, "noise_size", 100),
+                decoder_relu=True
+            ).to(self.dev)
+            try:
+                checkpoint = torch.load(path_to_SDbOA_weights, map_location=self.dev)
+                self.gen.load_state_dict(checkpoint)
+                print(f"Loaded SDbOA Generator-Checkpoints from {path_to_SDbOA_weights}.")
+            except:
+                print(f"Failed to load SDbOA Generator-Checkpoints from {path_to_SDbOA_weights}.")
+            self.gen.eval()
+
+
+        # import xFeat Net/Modell
         self.net = XFeatModel().to(self.dev)
+
 
         #Setup optimizer 
         self.batch_size = batch_size
@@ -128,14 +181,93 @@ class Trainer():
             self.data_iter = None
         ##################### MEGADEPTH INIT END #######################
 
+
+        ##################### SHAPE DEFORMATION INIT ##########################
+        if self.use_SDbOA:
+            self.deformer = shapeDeformation(
+                device = self.dev,
+                config = SDbOA_config,
+                netG = self.gen
+            )
+        else:
+            self.deformer = None
+        ##################### SHAPE DEFORMATION INIT END ##########################
+
         os.makedirs(ckpt_save_path, exist_ok=True)
         os.makedirs(ckpt_save_path + '/logdir', exist_ok=True)
+        self.viz_dir = os.path.join(ckpt_save_path, "viz")
+        os.makedirs(self.viz_dir, exist_ok=True)
 
         self.dry_run = dry_run
         self.save_ckpt_every = save_ckpt_every
         self.ckpt_save_path = ckpt_save_path
         self.writer = SummaryWriter(ckpt_save_path + f'/logdir/{model_name}_' + time.strftime("%Y_%m_%d-%H_%M_%S"))
         self.model_name = model_name
+
+
+
+
+    def _to_vis(self, x: torch.Tensor) -> torch.Tensor:
+        """Bringt Tensor auf [0,1] RGB-Form für die Anzeige."""
+        if x is None:
+            return None
+        x = x.detach().float().cpu()
+        if x.dim() == 3:
+            x = x.unsqueeze(0)
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
+        # Map [-1,1] -> [0,1] falls nötig
+        if x.min().item() < 0.0 or x.max().item() > 1.0:
+            x = x * 0.5 + 0.5
+        return x.clamp(0.0, 1.0)
+
+    def _save_before_after(self, tag: str, before: torch.Tensor, after: torch.Tensor, step: int,
+                        out_dir: str, max_n: int = 4, nrow: int = 4) -> None:
+        """Speichert ein Side-by-Side PNG: oben 'before', unten 'after' (oder links/rechts – siehe code)."""
+        if before is None or after is None:
+            return
+        b = self._to_vis(before)[:max_n]
+        a = self._to_vis(after)[:max_n]
+
+        grid_b = make_grid(b, nrow=min(nrow, b.shape[0]), padding=2)
+        grid_a = make_grid(a, nrow=min(nrow, a.shape[0]), padding=2)
+
+        # auf gleiche Größe bringen (H x W kann differieren)
+        H = max(grid_b.shape[1], grid_a.shape[1])
+        W = max(grid_b.shape[2], grid_a.shape[2])
+        pad_b = (0, W - grid_b.shape[2], 0, H - grid_b.shape[1])  # (left,right,top,bottom)
+        pad_a = (0, W - grid_a.shape[2], 0, H - grid_a.shape[1])
+        grid_b = F.pad(grid_b, pad_b, value=1.0)
+        grid_a = F.pad(grid_a, pad_a, value=1.0)
+
+        # Variante 1: horizontal nebeneinander
+        # side_by_side = torch.cat([grid_b, grid_a], dim=2)
+        # Variante 2 (alternativ): vertikal untereinander
+        side_by_side = torch.cat([grid_b, grid_a], dim=1)
+
+        save_path = os.path.join(out_dir, f"{tag}_step_{step:06d}.png")
+        save_image(side_by_side, save_path)
+
+
+    def _rotate_to_landscape(self, x: torch.Tensor):
+        """
+        Wenn H>W -> rotiere 90° (CCW) in Landscape.
+        Gibt (x_rot, was_rotated: bool) zurück.
+        """
+        B, C, H, W = x.shape
+        is_rot = False
+        if H > W:
+            x = rotate(img=x, angle=90, expand=True)
+            is_rot = True
+        return x, is_rot
+
+    def _undo_rotate(self, x: torch.Tensor, was_rotated: bool):
+        """
+        Dreht ggf. 90° zurück (CW), falls vorher rotiert wurde.
+        """
+        if was_rotated:
+            return rotate(img=x, angle=270, expand=True)
+        return x
 
 
     def train(self):
@@ -182,6 +314,52 @@ class Trainer():
                 if self.augmentor is not None:
                     h_coarse, w_coarse = p1s[0].shape[-2] // 8, p1s[0].shape[-1] // 8
                     _ , positives_s_coarse = get_corresponding_pts(p1s, p2s, H1, H2, self.augmentor, h_coarse, w_coarse)
+
+                # --- VOR Deformation: Kopien sichern (damit wir sie nachher haben) ---
+                if self.save_before_and_after:
+                    p1_before  = p1.clone()  if d is not None else None
+                    p2_before  = p2.clone()  if d is not None else None
+                    p1s_before = p1s.clone() if self.augmentor is not None else None
+                    p2s_before = p2s.clone() if self.augmentor is not None else None
+
+                if self.use_SDbOA:
+                    # ---------- MegaDepth-Paar ----------
+                    if d is not None:
+                        # 1) if needed turn images to landscape
+                        p1_rot, p1_was_rot = self._rotate_to_landscape(p1)
+                        p2_rot, p2_was_rot = self._rotate_to_landscape(p2)
+
+                        # 3) do deformation
+                        p1_def, grid_md = self.deformer(x=p1_rot, blend_alpha=1, use_tsd=True, grid=None)
+                        p2_def, _ = self.deformer(x=p2_rot, blend_alpha=1, use_tsd=True, grid=grid_md)
+
+                        # 4) turn back to original
+                        p1 = self._undo_rotate(p1_def, p1_was_rot)
+                        p2 = self._undo_rotate(p2_def, p2_was_rot)
+
+                    # ---------- Synthetik-Paar ----------
+                    if self.augmentor is not None:
+                        # 1) if needed turn images to landscape
+                        p1s_rot, p1s_was_rot = self._rotate_to_landscape(p1s)
+                        p2s_rot, p2s_was_rot = self._rotate_to_landscape(p2s)
+
+                        # 3) do deformation
+                        p1s_def, grid_s = self.deformer(p1s_rot, blend_alpha=1, use_tsd=True, grid=None)
+                        p2s_def, _ = self.deformer(p2s_rot, blend_alpha=1, use_tsd=True, grid=grid_s)
+
+                        # 4) turn back to original
+                        p1s = self._undo_rotate(p1s_def, p1s_was_rot)
+                        p2s = self._undo_rotate(p2s_def, p2s_was_rot)
+
+                # --- NACH Deformation: Side-by-Side PNGs speichern ---
+                if self.save_before_and_after:
+                    if d is not None:
+                        self._save_before_after("p1",  p1_before,  p1,  i, self.viz_dir)
+                        self._save_before_after("p2",  p2_before,  p2,  i, self.viz_dir)
+                    if self.augmentor is not None:
+                        self._save_before_after("p1s", p1s_before, p1s, i, self.viz_dir)
+                        self._save_before_after("p2s", p2s_before, p2s, i, self.viz_dir)
+                    self.save_before_and_after=False
 
                 #Join megadepth & synthetic data
                 with torch.inference_mode():
@@ -257,7 +435,6 @@ class Trainer():
                 loss = torch.cat(loss_items, -1).mean()
                 loss_coarse = loss_ds.item()
                 loss_coord = loss_coords.item()
-                loss_coord = loss_coords.item()
                 loss_kp_pos = loss_kp_pos.item()
                 loss_l1 = loss_kp.item()
 
@@ -268,7 +445,9 @@ class Trainer():
                 self.opt.zero_grad()
                 self.scheduler.step()
 
-                if (i+1) % self.save_ckpt_every == 0:
+                if i % self.save_ckpt_every == 0:
+                    self.save_before_and_after = True
+                elif (i+1) % self.save_ckpt_every == 0:
                     print('saving iter ', i+1)
                     torch.save(self.net.state_dict(), self.ckpt_save_path + f'/{self.model_name}_{i+1}.pth')
 
@@ -297,6 +476,9 @@ if __name__ == '__main__':
         synthetic_root_path=args.synthetic_root_path, 
         ckpt_save_path=args.ckpt_save_path,
         model_name=args.training_type,
+        use_SDbOA=args.use_SDbOA,
+        path_to_SDbOA_weights=args.path_to_SDbOA_weights,
+        path_to_SDbOA_config=args.path_to_SDbOA_config,
         batch_size=args.batch_size,
         n_steps=args.n_steps,
         lr=args.lr,

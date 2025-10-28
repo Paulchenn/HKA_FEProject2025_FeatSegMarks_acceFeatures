@@ -17,6 +17,9 @@ import copy
 
 import tqdm
 
+from torchvision.transforms.functional import rotate
+
+
 # Disable scientific notation
 np.set_printoptions(suppress=True)
 
@@ -197,7 +200,7 @@ def compute_maa(pairs, thresholds=[5, 10, 20]):
     
 
 @torch.inference_mode()
-def run_pose_benchmark(matcher_fn, loader, ransac_thr=2.5):
+def run_pose_benchmark(matcher_fn, loader, deformer=None, ransac_thr=2.5, doDeform=False):
     """
         Run relative pose estimation benchmark using a specified matcher function and data loader.
 
@@ -220,11 +223,35 @@ def run_pose_benchmark(matcher_fn, loader, ransac_thr=2.5):
     cnt = 0
     for d in tqdm.tqdm(loader):
         d_error = {}
-        src_pts, dst_pts = matcher_fn(tensor2bgr(d['image0']), tensor2bgr(d['image1']))
+
+        p1 = d['image0']
+        p2 = d['image1']
+
+
+        # 1) if needed turn images to landscape
+        p1_rot, p1_was_rot = _rotate_to_landscape(p1)
+        p2_rot, p2_was_rot = _rotate_to_landscape(p2)
+
+        if deformer:
+            if d is not None:
+                #print(f"Do Deformation: {doDeform}")
+                p1_def, grid    = deformer(x=p1_rot, blend_alpha=1, use_tsd=doDeform, grid=None)
+                p2_def, _       = deformer(x=p2_rot, blend_alpha=1, use_tsd=doDeform, grid=grid)
+        else:
+            p1_def = p1
+            p2_def = p2
+
+        # 3) turn back to original
+        p1 = _undo_rotate(p1_def, p1_was_rot)
+        p2 = _undo_rotate(p2_def, p2_was_rot)
+                
+        src_pts, dst_pts = matcher_fn(tensor2bgr(p1), tensor2bgr(p2))
 
         #delete images to avoid OOM, happens in low mem machines
         del d['image0']
         del d['image1']
+        del p1
+        del p2
 
         #rescale kpts
         src_pts = src_pts * d['scale0'].numpy()
@@ -236,6 +263,26 @@ def run_pose_benchmark(matcher_fn, loader, ransac_thr=2.5):
 
     compute_maa(pairs)
 
+def _rotate_to_landscape(x: torch.Tensor):
+    """
+    Wenn H>W -> rotiere 90° (CCW) in Landscape.
+    Gibt (x_rot, was_rotated: bool) zurück.
+    """
+    B, C, H, W = x.shape
+    is_rot = False
+    if H > W:
+        x = rotate(img=x, angle=90, expand=True)
+        is_rot = True
+    return x, is_rot
+
+def _undo_rotate(x: torch.Tensor, was_rotated: bool):
+    """
+    Dreht ggf. 90° zurück (CW), falls vorher rotiert wurde.
+    """
+    if was_rotated:
+        return rotate(img=x, angle=270, expand=True)
+    return x
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run pose benchmark with matcher")
     parser.add_argument('--dataset-dir', type=str, required=True,
@@ -244,6 +291,18 @@ def parse_args():
                         help="Matcher to use (xfeat or alike)")
     parser.add_argument('--ransac-thr', type=float, default=2.5,
                         help="RANSAC threshold value in pixels (default: 2.5)")
+    parser.add_argument('--weights-path', type=str, required=False, default=None,
+                        help="Path to custom weights / pt file if wanted.")
+    parser.add_argument('--use_SDbOA', action='store_true',
+                        help='Usage of Prepipeline. If on "True" xFeat will train with pretrainied SDbOA.')
+    parser.add_argument('--path_to_SDbOA', type=str, default='/home/docker/torch/code/SDbOA',
+                        help='Path to RePo of SDbOA.')
+    parser.add_argument('--path_to_SDbOA_weights', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
+    parser.add_argument('--path_to_SDbOA_config', type=str, default='/home/docker/torch/code/SDbOA/Result',
+                        help='Path to weights of SDbOA')
+    parser.add_argument('--do_Deformation', action='store_true',
+                        help='Usage of Deformation. If on "True" SDbOA will deform.')
     return parser.parse_args()
 
 
@@ -256,11 +315,39 @@ if __name__ == '__main__':
 
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
+    if args.use_SDbOA:
+        sys.path.insert(0, args.path_to_SDbOA)
+        from models import generation_imageNet_V2_3 as SDbOA_model
+        from modules.dataset.shapeDeformation import *
+        dev='cuda'
+        gen = SDbOA_model.generator(img_size=(608,800), z_dim=100).to(dev)
+        try:
+            checkpoint = torch.load(args.path_to_SDbOA_weights, map_location=dev)
+            gen.load_state_dict(checkpoint)
+            print(f"Loaded SDbOA Generator-Checkpoints from {args.path_to_SDbOA_weights}.")
+        except:
+            print(f"Failed to load SDbOA Generator-Checkpoints from {args.path_to_SDbOA_weights}.")
+        gen.eval()
+
+        with open(args.path_to_SDbOA_config, 'r') as f:
+            SDbOA_config = json.load(f)
+
+        deformer = shapeDeformation(
+            device = 'cuda',
+            config = SDbOA_config,
+            netG = gen
+        )
+    else:
+        deformer=None
+
     if args.matcher == 'xfeat':
         print("Running benchmark for XFeat..")
         from modules.xfeat import XFeat
-        xfeat = XFeat()
-        run_pose_benchmark(matcher_fn = xfeat.match_xfeat, loader = loader, ransac_thr = args.ransac_thr)
+        if args.weights_path == None:
+            xfeat = XFeat()
+        else:
+            xfeat = XFeat(weights=args.weights_path)
+        run_pose_benchmark(matcher_fn = xfeat.match_xfeat, deformer=deformer, loader = loader, ransac_thr = args.ransac_thr, doDeform=args.do_Deformation)
 
     elif args.matcher == 'xfeat-star':
         from modules.xfeat import XFeat
